@@ -905,10 +905,11 @@ Request::handle_response_header(const asio::error_code& ec)
     auto transfer_encoding_it = response_.headers.find(HTTP_HEADER_TRANSFER_ENCODING);
 
     // has content-length
+    unsigned int content_length;
     if (content_length_it != response_.headers.end())
     {
         std::getline(is, response_.body);
-        unsigned int content_length = atoi(content_length_it->second.c_str());
+        content_length = atoi(content_length_it->second.c_str());
         // full body already in the header
         if (response_.body.size() + 1 == content_length) {
             response_.body.append("\n");
@@ -936,9 +937,24 @@ Request::handle_response_header(const asio::error_code& ec)
     {
         std::string chunk_size;
         std::getline(is, chunk_size);
-        unsigned int content_length = std::stoul(chunk_size, nullptr, 16);
-        conn_->async_read(content_length,
-            std::bind(&Request::handle_response_body, this, std::placeholders::_1, std::placeholders::_2));
+        try {
+            content_length = std::stoul(chunk_size, nullptr, 16);
+            std::cout << content_length << std::endl;
+            std::string extra_chunk;
+            std::getline(is, extra_chunk);
+            if (!extra_chunk.empty())
+                response_.body += extra_chunk;
+            std::cout << "extra chunk of " << extra_chunk.size() << std::endl << extra_chunk << std::endl;
+            if (content_length > extra_chunk.size()){
+                std::cout << "content_length > extra_chunk.size()" << std::endl;
+                conn_->async_read(content_length - extra_chunk.size(),
+                    std::bind(&Request::handle_response_body, this, std::placeholders::_1, std::placeholders::_2));
+                return;
+            }
+        } catch (const std::exception&){
+            if (logger_)
+                logger_->e("[http:client]  [request:%i] error parsing chunk size: '%s'", id_, chunk_size.c_str());
+        }
     }
 }
 
@@ -979,12 +995,15 @@ Request::handle_response_body(const asio::error_code& ec, const size_t bytes)
     // read and parse the chunked encoding fragment
     else {
         auto body = conn_->read_until(BODY_VALUE_DELIM[0]);
+        std::cout << "chunk:\n" << body << std::endl;
         response_.body += body;
-        if (body == "0\r\n"){
-            parse_request(response_.body);
+        if (body == "0\r"){
+            std::cout << "the end" << std::endl;
+            parse_request(response_.body + '\n');
             terminate(asio::error::eof);
             return;
         }
+        std::cout << "going to parse:\n" << body << std::endl;
         parse_request(body + '\n');
     }
 
@@ -1014,13 +1033,36 @@ Request::handle_response_body(const asio::error_code& ec, const size_t bytes)
         std::istream is(&conn_->data());
         std::string chunk_size;
         std::getline(is, chunk_size);
-        if (chunk_size.size() == 0){
+        std::cout << "hex chunk size: " << chunk_size << std::endl;
+        if (chunk_size.size() > 0){
+            try {
+                content_length = std::stoul(chunk_size, nullptr, 16);
+                std::cout << content_length << std::endl;
+                std::string extra_chunk;
+                std::getline(is, extra_chunk);
+                if (!extra_chunk.empty())
+                    response_.body += extra_chunk;
+                std::cout << "extra chunk of " << extra_chunk.size() << std::endl << extra_chunk << std::endl;
+                if (content_length > extra_chunk.size()){
+                    std::cout << "content_length > extra_chunk.size()" << std::endl;
+                    conn_->async_read(content_length - extra_chunk.size(),
+                        std::bind(&Request::handle_response_body, this, std::placeholders::_1, std::placeholders::_2));
+                    return;
+                }
+            } catch (const std::exception&){
+                if (logger_)
+                    logger_->e("[http:client]  [request:%i] error parsing chunk size: '%s'", id_, chunk_size.c_str());
+            }
+            /*
             parse_request(response_.body);
             terminate(asio::error::eof);
+            return;
+            */
         }
-        else
-            conn_->async_read_until(BODY_VALUE_DELIM,
-                std::bind(&Request::handle_response_body, this, std::placeholders::_1, std::placeholders::_2));
+        //parse_request(response_.body);
+        //terminate(asio::error::eof);
+        conn_->async_read_until(BODY_VALUE_DELIM,
+            std::bind(&Request::handle_response_body, this, std::placeholders::_1, std::placeholders::_2));
     }
 }
 

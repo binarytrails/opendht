@@ -290,9 +290,9 @@ DhtProxyClient::get(const InfoHash& key, GetCallback cb, DoneCallback donecb, Va
             }
         });
         request->add_on_body_callback([this, key, opstate, filter, cb](const char* at, size_t length){
+            auto body = std::string(at, length);
             try {
                 Json::CharReaderBuilder rbuilder;
-                auto body = std::string(at, length);
                 // one value per body line
                 std::string data_line;
                 std::stringstream body_stream(body);
@@ -320,7 +320,7 @@ DhtProxyClient::get(const InfoHash& key, GetCallback cb, DoneCallback donecb, Va
                 }
             } catch(const std::exception& e) {
                 if (logger_)
-                    logger_->e("[proxy:client] [get %s] body parsing error: %s", key.to_c_str(), e.what());
+                    logger_->e("[proxy:client] [get %s] body parsing error: %s\n%s", key.to_c_str(), e.what(), body.c_str());
                 opstate->ok.store(false);
             }
         });
